@@ -76,7 +76,7 @@ def test_lists_general_purpose_tools():
 def test_initialize_reports_current_server_version():
     server = make_server(FakeBridge())
     response = server.handle({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}})
-    assert response["result"]["serverInfo"] == {"name": "ableton-live-mcp", "version": "0.2.0"}
+    assert response["result"]["serverInfo"] == {"name": "ableton-live-mcp", "version": "0.3.0"}
 
 
 def test_initialize_includes_general_model_instructions():
@@ -138,7 +138,7 @@ def test_initialize_includes_general_model_instructions():
 def test_validate_reports_local_mcp_tool_schemas():
     status = validate.mcp_tool_schema_status()
     assert status["ok"] is True
-    assert status["server_version"] == "0.2.0"
+    assert status["server_version"] == "0.3.0"
     checks = {item["tool"]: item for item in status["checks"]}
     assert checks["live_agent_audio_tap"]["ok"] is True
     assert checks["live_transport"]["ok"] is True
@@ -2419,8 +2419,9 @@ def test_tool_list_stays_compact():
     server = make_server(FakeBridge())
     response = server.handle({"jsonrpc": "2.0", "id": 7, "method": "tools/list"})
     payload = json.dumps(response, separators=(",", ":"))
-    # Budget raised from 16350 when the 10 lifecycle/convenience/fade tools were added.
-    assert len(payload) < 20500
+    # Budget raised from 16350 when the 10 lifecycle/convenience/fade tools were added,
+    # then from 20500 for the 12 Rough named wrappers (~7.9KB, terse schemas).
+    assert len(payload) < 28500
     live_eval = next(tool for tool in response["result"]["tools"] if tool["name"] == "live_eval")
     assert "live_exec" in live_eval["description"]
     assert "duplicate session clips" not in live_eval["description"].lower()
@@ -3041,7 +3042,7 @@ def test_remote_script_status_detects_stale_install(tmp_path):
     assert current["current"] is True
     assert len(current["source_bridge_sha256"]) == 64
     assert current["target_bridge_sha256"] == current["source_bridge_sha256"]
-    assert current["source_runtime_version"] == "lifecycle-fade-wrappers-1"
+    assert current["source_runtime_version"] == "rough-wrappers-1"
     assert current["target_runtime_version"] == current["source_runtime_version"]
     assert len(current["source_runtime_code_sha256"]) == 64
     assert current["target_runtime_code_sha256"] == current["source_runtime_code_sha256"]

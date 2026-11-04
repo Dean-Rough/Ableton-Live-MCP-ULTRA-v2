@@ -308,3 +308,15 @@ Generated hosts may also create Max-object `live.path`/`live.observer value` obs
 When routing Max-object `live.observer value` output into generated bindings, normalize observer atoms first. Max may output `value <number>` rather than a bare number; the binding layer must apply the observed numeric value, not the literal symbol.
 
 Generated hosts also expose a hidden Live parameter used only to try to wake the command-file poller; Live may surface it as `Agent Poll`, `Agent M4L Poll`, or the Max box name `command-trigger`. After writing a command file, the Remote Script may toggle one of those names on the target generated device when a target track is available, but the command is not successful until the status file reports the matching `command_id`.
+
+## Rough named wrappers
+
+Prefer these over `live_exec` for routine edits; they validate inputs, report `changed: {field: [before, after]}`, and are covered by `tests/test_rough_wrappers.py`.
+
+- Selectors: tracks take `track_index`, `return_index`, `master: true`, or `ref`. Clips take `ref` (clip or clip slot), or `track_index` with `clip_index` (Session) or `arrangement_clip_index`.
+- `live_track_set`: `volume` is Live's raw 0..1 (0.85 = 0 dB), `panning` -1..1, `sends: [{"index": 0, "value": 0.3}]`, `monitoring` `in|auto|off`. Arm is refused on returns, master and groups.
+- `live_clip_set`: `launch_mode` 0 trigger, 1 gate, 2 toggle, 3 repeat. `launch_quantization` 0 global, 1 none, 2 8 bars, 3 4 bars, 4 2 bars, 5 1 bar, 6 1/2, 7 1/2T, 8 1/4, 9 1/4T, 10 1/8, 11 1/8T, 12 1/16, 13 1/16T, 14 1/32. `warp_mode` 0 beats, 1 tones, 2 texture, 3 re-pitch, 4 complex, 6 complex pro. `gain`, `pitch_*`, `warp*` are refused on MIDI clips.
+- `live_locators`: create and delete move the playhead for one tick, then restore it, so they refuse while the transport is playing. The server confirms the result with a follow-up list; on `confirmed: false`, list again before retrying (never blind-retry a mutation).
+- `live_song_set`: `root_note` accepts 0-11 or a note name (`"Eb"`); fields the running Live version lacks come back as `"unsupported on this Live version"` rather than failing the call. `session_record` reads back one tick late, so trust the reported request.
+- Batch-only: `{"method": "clip_select_notes", "params": {..., "note_ids": [...] | "select_all": true | "deselect": true}}` and `{"method": "take_lanes", "params": {"track_index": 0, "action": "list|create"}}` via `live_batch`.
+- Not available to Remote Scripts at all: freeze, render/export/bounce, track reordering, mid-arrangement time-signature changes, saving a never-saved set without the dialog.

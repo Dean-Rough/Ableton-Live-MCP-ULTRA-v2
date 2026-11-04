@@ -25,7 +25,7 @@ DEFAULT_CHILD_LIMIT = 200
 DEFAULT_MAIN_THREAD_TIMEOUT = 30
 DEFAULT_MAIN_THREAD_STALL_COOLDOWN = 10
 DEFAULT_BROWSER_ROOTS = ("instruments", "audio_effects", "midi_effects", "drums", "samples", "sounds", "packs", "plugins", "user_library", "user_folders", "current_project")
-REMOTE_SCRIPT_RUNTIME_VERSION = "lifecycle-fade-wrappers-1"
+REMOTE_SCRIPT_RUNTIME_VERSION = "rough-wrappers-1"
 FADE_UNITY_VALUE = 0.8500000238418579
 FADE_MAX_DURATION = 60.0
 FADE_DEFAULT_STEPS = 40
@@ -979,6 +979,679 @@ class AbletonLiveMCP(ControlSurface):
         before = float(song.tempo)
         song.tempo = tempo
         return {"tempo": float(song.tempo), "before": before, "changed": before != float(song.tempo)}
+
+    # ------------------------------------------------------------------
+    # Rough additions: named wrappers for capabilities found in
+    # ahujasid/ableton-mcp and Tompz/ableton-mcp that this bridge only
+    # reached through live_exec. LOM quirks noted inline were verified by
+    # Tompz/ableton-mcp against Live 12.4 (see NOTICE.md).
+    # ------------------------------------------------------------------
+
+    _NOTE_NAMES = ("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B")
+
+    def _resolve_any_track(self, params):
+        if params.get("return_index") is not None:
+            return self.song().return_tracks[int(params["return_index"])]
+        return self._resolve_track_param(params)
+
+    def _track_index_of(self, track):
+        song = self.song()
+        for index, candidate in enumerate(song.tracks):
+            if candidate is track:
+                return ("track", index)
+        for index, candidate in enumerate(song.return_tracks):
+            if candidate is track:
+                return ("return", index)
+        if track is song.master_track:
+            return ("master", None)
+        return (None, None)
+
+    def _resolve_clip_any(self, params):
+        if params.get("ref"):
+            obj = self._resolve(params["ref"])
+            if hasattr(obj, "has_clip"):
+                if not obj.has_clip:
+                    raise ValueError("Clip slot is empty")
+                return obj.clip
+            return obj
+        if params.get("track_index") is None:
+            raise ValueError("Provide ref, or track_index with clip_index or arrangement_clip_index")
+        track = self.song().tracks[int(params["track_index"])]
+        if params.get("arrangement_clip_index") is not None:
+            return track.arrangement_clips[int(params["arrangement_clip_index"])]
+        if params.get("clip_index") is None:
+            raise ValueError("Provide clip_index or arrangement_clip_index")
+        slot = track.clip_slots[int(params["clip_index"])]
+        if not getattr(slot, "has_clip", False):
+            raise ValueError("Clip slot %s is empty" % params["clip_index"])
+        return slot.clip
+
+    def _parse_color(self, value):
+        if isinstance(value, str):
+            text = value.strip().lstrip("#")
+            if text.lower().startswith("0x"):
+                text = text[2:]
+            return int(text, 16)
+        return int(value)
+
+    def _apply_props(self, obj, params, spec):
+        """Set only the provided fields; return {field: [before, after]}."""
+        changed = {}
+        for field, caster in spec:
+            if field not in params or params[field] is None:
+                continue
+            before = getattr(obj, field, None)
+            setattr(obj, field, caster(params[field]))
+            changed[field] = [before, getattr(obj, field, None)]
+        return changed
+
+    def _scene_summary(self, scene, index):
+        summary = {"index": index, "name": getattr(scene, "name", "")}
+        for attr in ("color", "tempo", "is_empty"):
+            if hasattr(scene, attr):
+                summary[attr] = getattr(scene, attr)
+        return summary
+
+    def _rpc_scene(self, params):
+        song = self.song()
+        action = params.get("action") or "list"
+        index = params.get("index")
+        if action == "list":
+            return {"scenes": [self._scene_summary(scene, i) for i, scene in enumerate(song.scenes)]}
+        if action == "stop_all":
+            song.stop_all_clips(bool(params.get("quantized", True)))
+            return {"stopped_all": True}
+        if action == "create":
+            position = int(index if index is not None else -1)
+            created = song.create_scene(position)
+            new_index = len(song.scenes) - 1 if position < 0 else position
+            scene = created if created is not None else song.scenes[new_index]
+            if params.get("name"):
+                scene.name = str(params["name"])
+            if params.get("color") is not None:
+                scene.color = self._parse_color(params["color"])
+            return {"created": self._scene_summary(scene, new_index), "scene_count": len(song.scenes)}
+        if index is None:
+            raise ValueError("index is required for %s" % action)
+        index = int(index)
+        scene = song.scenes[index]
+        if action == "fire":
+            scene.fire()
+            return {"fired": index}
+        if action == "rename":
+            before = getattr(scene, "name", "")
+            scene.name = str(params.get("name") or "")
+            if params.get("color") is not None:
+                scene.color = self._parse_color(params["color"])
+            return {"scene": self._scene_summary(scene, index), "before_name": before}
+        if action == "duplicate":
+            song.duplicate_scene(index)
+            return {"duplicated": index, "new_index": index + 1, "scene_count": len(song.scenes)}
+        if action == "delete":
+            name = getattr(scene, "name", "")
+            song.delete_scene(index)
+            return {"deleted": name, "index": index, "scene_count": len(song.scenes)}
+        raise ValueError("action must be list, create, fire, rename, duplicate, delete, or stop_all")
+
+    def _rpc_delete(self, params):
+        song = self.song()
+        target = params.get("target")
+        if target == "track":
+            if params.get("return_index") is not None:
+                index = int(params["return_index"])
+                name = song.return_tracks[index].name
+                song.delete_return_track(index)
+                return {"deleted": name, "return_index": index}
+            index = int(params["track_index"])
+            name = song.tracks[index].name
+            song.delete_track(index)
+            return {"deleted": name, "track_index": index, "track_count": len(song.tracks)}
+        if target == "device":
+            track = self._resolve_any_track(params)
+            index = int(params["device_index"])
+            name = track.devices[index].name
+            track.delete_device(index)
+            return {"deleted": name, "device_index": index, "device_count": len(track.devices)}
+        if target == "clip":
+            track = song.tracks[int(params["track_index"])]
+            if params.get("arrangement_clip_index") is not None:
+                clip = track.arrangement_clips[int(params["arrangement_clip_index"])]
+                name = clip.name
+                track.delete_clip(clip)
+                return {"deleted": name, "arrangement": True}
+            slot = track.clip_slots[int(params["clip_index"])]
+            if not getattr(slot, "has_clip", False):
+                return {"deleted": None, "reason": "slot already empty"}
+            name = slot.clip.name
+            slot.delete_clip()
+            return {"deleted": name, "clip_index": int(params["clip_index"])}
+        raise ValueError("target must be track, device, or clip")
+
+    def _rpc_duplicate(self, params):
+        song = self.song()
+        target = params.get("target")
+        if target == "track":
+            index = int(params["track_index"])
+            song.duplicate_track(index)
+            return {"duplicated": index, "new_index": index + 1, "track_count": len(song.tracks)}
+        if target == "clip":
+            track = song.tracks[int(params["track_index"])]
+            clip_index = int(params["clip_index"])
+            if params.get("to_track_index") is not None or params.get("to_clip_index") is not None:
+                dest_track = song.tracks[int(params.get("to_track_index", params["track_index"]))]
+                dest_slot = dest_track.clip_slots[int(params["to_clip_index"])]
+                track.clip_slots[clip_index].duplicate_clip_to(dest_slot)
+                return {"duplicated": clip_index, "to_clip_index": int(params["to_clip_index"])}
+            new_index = track.duplicate_clip_slot(clip_index)
+            return {"duplicated": clip_index, "new_index": new_index}
+        raise ValueError("target must be track or clip (scenes: live_scene action=duplicate)")
+
+    def _rpc_edit(self, params):
+        op = params.get("op")
+        if op == "delete":
+            return self._rpc_delete(params)
+        if op == "duplicate":
+            return self._rpc_duplicate(params)
+        raise ValueError("op must be delete or duplicate")
+
+    def _rpc_track_set(self, params):
+        track = self._resolve_any_track(params)
+        mixer = track.mixer_device
+        changed = {}
+        if params.get("name") is not None:
+            changed["name"] = [track.name, str(params["name"])]
+            track.name = str(params["name"])
+        if params.get("color") is not None:
+            before = getattr(track, "color", None)
+            track.color = self._parse_color(params["color"])
+            changed["color"] = [before, track.color]
+        if params.get("color_index") is not None:
+            before = getattr(track, "color_index", None)
+            track.color_index = int(params["color_index"])
+            changed["color_index"] = [before, track.color_index]
+        for field in ("volume", "panning"):
+            if params.get(field) is not None:
+                param = getattr(mixer, field)
+                value = float(params[field])
+                if not (float(param.min) <= value <= float(param.max)):
+                    raise ValueError("%s %.3f outside %.3f..%.3f" % (field, value, param.min, param.max))
+                before = float(param.value)
+                param.value = value
+                changed[field] = [before, float(param.value)]
+        for send in params.get("sends") or []:
+            index = int(send["index"])
+            param = mixer.sends[index]
+            before = float(param.value)
+            param.value = float(send["value"])
+            changed["send_%d" % index] = [before, float(param.value)]
+        for field in ("mute", "solo"):
+            if params.get(field) is not None:
+                before = bool(getattr(track, field))
+                setattr(track, field, bool(params[field]))
+                changed[field] = [before, bool(getattr(track, field))]
+        if params.get("arm") is not None:
+            if not getattr(track, "can_be_armed", False):
+                raise ValueError("Track cannot be armed (return, master, or group track)")
+            before = bool(track.arm)
+            track.arm = bool(params["arm"])
+            changed["arm"] = [before, bool(track.arm)]
+        if params.get("monitoring") is not None:
+            states = {"in": 0, "auto": 1, "off": 2}
+            value = params["monitoring"]
+            value = states[value] if isinstance(value, str) else int(value)
+            before = getattr(track, "current_monitoring_state", None)
+            track.current_monitoring_state = value
+            changed["monitoring"] = [before, track.current_monitoring_state]
+        if params.get("fold") is not None:
+            if not getattr(track, "is_foldable", False):
+                raise ValueError("Only group tracks can fold")
+            before = bool(track.fold_state)
+            track.fold_state = 1 if params["fold"] else 0
+            changed["fold"] = [before, bool(track.fold_state)]
+        kind, index = self._track_index_of(track)
+        return {"track": {"kind": kind, "index": index, "name": track.name}, "changed": changed}
+
+    def _rpc_undo(self, params):
+        song = self.song()
+        action = params.get("action") or "undo"
+        count = max(1, int(params.get("count") or 1))
+        done = 0
+        for _ in range(count):
+            if action == "undo":
+                if not song.can_undo:
+                    break
+                song.undo()
+            elif action == "redo":
+                if not song.can_redo:
+                    break
+                song.redo()
+            else:
+                raise ValueError("action must be undo or redo")
+            done += 1
+        return {"action": action, "requested": count, "done": done,
+                "can_undo": bool(song.can_undo), "can_redo": bool(song.can_redo)}
+
+    _CLIP_PROP_SPEC = (
+        ("name", str),
+        ("color_index", int),
+        ("muted", bool),
+        ("launch_mode", int),
+        ("launch_quantization", int),
+        ("legato", bool),
+        ("velocity_amount", float),
+        ("start_marker", float),
+        ("end_marker", float),
+        ("gain", float),
+        ("pitch_coarse", int),
+        ("pitch_fine", float),
+        ("warping", bool),
+        ("warp_mode", int),
+        ("ram_mode", bool),
+    )
+
+    def _rpc_clip_set(self, params):
+        clip = self._resolve_clip_any(params)
+        audio_only = ("gain", "pitch_coarse", "pitch_fine", "warping", "warp_mode", "ram_mode")
+        if not getattr(clip, "is_audio_clip", False):
+            bad = [field for field in audio_only if params.get(field) is not None]
+            if bad:
+                raise ValueError("Audio-clip-only fields on a MIDI clip: %s" % ", ".join(bad))
+        changed = {}
+        if params.get("looping") is not None:
+            before = bool(clip.looping)
+            clip.looping = bool(params["looping"])
+            changed["looping"] = [before, bool(clip.looping)]
+        loop_start = params.get("loop_start")
+        loop_end = params.get("loop_end")
+        if loop_start is not None or loop_end is not None:
+            before = [float(clip.loop_start), float(clip.loop_end)]
+            # Live rejects loop_start >= loop_end at every intermediate step,
+            # so order the writes to keep the interval valid throughout.
+            if loop_start is not None and float(loop_start) >= float(clip.loop_end):
+                clip.loop_end = float(loop_end if loop_end is not None else float(loop_start) + (before[1] - before[0]))
+                clip.loop_start = float(loop_start)
+            else:
+                if loop_start is not None:
+                    clip.loop_start = float(loop_start)
+                if loop_end is not None:
+                    clip.loop_end = float(loop_end)
+            changed["loop"] = [before, [float(clip.loop_start), float(clip.loop_end)]]
+        if params.get("color") is not None:
+            before = getattr(clip, "color", None)
+            clip.color = self._parse_color(params["color"])
+            changed["color"] = [before, clip.color]
+        changed.update(self._apply_props(clip, params, self._CLIP_PROP_SPEC))
+        if params.get("groove_index") is not None:
+            index = int(params["groove_index"])
+            if index < 0:
+                clip.groove = None
+                changed["groove"] = "cleared"
+            else:
+                grooves = self.song().groove_pool.grooves
+                clip.groove = grooves[index]
+                changed["groove"] = getattr(grooves[index], "name", index)
+        return {"clip": getattr(clip, "name", ""), "changed": changed}
+
+    def _rpc_clip_remove_notes(self, params):
+        clip = self._resolve_clip_any(params)
+        if not getattr(clip, "is_midi_clip", False):
+            raise ValueError("Clip is not a MIDI clip")
+        from_pitch = int(params.get("from_pitch") or 0)
+        pitch_span = int(params.get("pitch_span") or 128)
+        from_time = float(params.get("from_time") or 0.0)
+        span = params.get("time_span")
+        time_span = float(span) if span is not None else max(float(getattr(clip, "length", 0.0)), float(getattr(clip, "loop_end", 0.0)), float(getattr(clip, "end_marker", 0.0))) + 1024.0
+        before = len(clip.get_notes_extended(from_pitch, pitch_span, from_time, time_span))
+        # Real C++ order is (from_pitch, pitch_span, from_time, time_span).
+        clip.remove_notes_extended(from_pitch, pitch_span, from_time, time_span)
+        after = len(clip.get_notes_extended(from_pitch, pitch_span, from_time, time_span))
+        return {"removed": before - after, "remaining_in_range": after}
+
+    def _rpc_clip_select_notes(self, params):
+        clip = self._resolve_clip_any(params)
+        if params.get("deselect"):
+            clip.deselect_all_notes()
+        elif params.get("select_all"):
+            clip.select_all_notes()
+        elif params.get("note_ids"):
+            clip.select_notes_by_id([int(note_id) for note_id in params["note_ids"]])
+        else:
+            raise ValueError("Provide note_ids, select_all:true, or deselect:true")
+        return {"selected_count": len(clip.get_selected_notes_extended())}
+
+    def _cue_list(self):
+        return [{"index": i, "name": getattr(cue, "name", ""), "time": float(cue.time)} for i, cue in enumerate(self.song().cue_points)]
+
+    def _find_cue(self, params):
+        cues = list(self.song().cue_points)
+        if params.get("index") is not None:
+            return cues[int(params["index"])]
+        if params.get("time") is not None:
+            for cue in cues:
+                if abs(float(cue.time) - float(params["time"])) < 1e-3:
+                    return cue
+            return None
+        if params.get("name"):
+            for cue in cues:
+                if getattr(cue, "name", "") == params["name"]:
+                    return cue
+            return None
+        raise ValueError("Provide index, time, or name")
+
+    def _toggle_cue_at(self, song, target_time, name=None):
+        # Setting current_song_time and toggling a cue in the same tick does
+        # not see the new position, so toggle one tick later and restore.
+        original_time = float(song.current_song_time)
+
+        def phase2():
+            try:
+                song.set_or_delete_cue()
+                if name:
+                    for cue in song.cue_points:
+                        if abs(float(cue.time) - target_time) < 1e-3:
+                            cue.name = str(name)
+                            break
+            finally:
+                try:
+                    song.current_song_time = original_time
+                except Exception:
+                    pass
+
+        song.current_song_time = target_time
+        self.schedule_message(1, phase2)
+
+    def _rpc_locators(self, params):
+        song = self.song()
+        action = params.get("action") or "list"
+        if action == "list":
+            return {"locators": self._cue_list()}
+        if action in ("create", "delete") and getattr(song, "is_playing", False):
+            raise ValueError("Stop the transport before creating or deleting locators")
+        if action == "create":
+            if params.get("time") is None:
+                raise ValueError("time (beats) is required")
+            target_time = float(params["time"])
+            existing = self._find_cue({"time": target_time})
+            if existing is not None:
+                if params.get("name"):
+                    existing.name = str(params["name"])
+                return {"locator": {"name": existing.name, "time": float(existing.time)}, "existed": True}
+            self._toggle_cue_at(song, target_time, params.get("name"))
+            return {"scheduled": "create", "time": target_time}
+        cue = self._find_cue(params)
+        if cue is None:
+            raise ValueError("No locator matches %r" % {k: params.get(k) for k in ("index", "time", "name") if params.get(k) is not None})
+        if action == "rename":
+            before = cue.name
+            cue.name = str(params.get("new_name") or params.get("name") or "")
+            return {"locator": {"name": cue.name, "time": float(cue.time)}, "before_name": before}
+        if action == "jump":
+            cue.jump()
+            return {"jumped": {"name": cue.name, "time": float(cue.time)}}
+        if action == "delete":
+            target_time = float(cue.time)
+            self._toggle_cue_at(song, target_time)
+            return {"scheduled": "delete", "time": target_time}
+        raise ValueError("action must be list, create, rename, jump, or delete")
+
+    def _match_routing(self, options, wanted):
+        wanted_l = str(wanted).lower()
+        options = list(options)
+        for option in options:
+            if option.display_name.lower() == wanted_l:
+                return option
+        for option in options:
+            if wanted_l in option.display_name.lower():
+                return option
+        raise ValueError("No routing option matching %r; available: %s" % (wanted, [o.display_name for o in options]))
+
+    def _routing_state(self, track, direction):
+        state = {}
+        for part in ("type", "channel"):
+            current = getattr(track, "%s_routing_%s" % (direction, part), None)
+            available = getattr(track, "available_%s_routing_%ss" % (direction, part), None)
+            if current is not None:
+                state[part] = current.display_name
+            if available is not None:
+                state["available_%ss" % part] = [option.display_name for option in available]
+        return state
+
+    def _rpc_track_routing(self, params):
+        track = self._resolve_any_track(params)
+        direction = params.get("direction")
+        if direction not in (None, "input", "output"):
+            raise ValueError("direction must be input or output")
+        changed = {}
+        if direction:
+            if params.get("type"):
+                option = self._match_routing(getattr(track, "available_%s_routing_types" % direction), params["type"])
+                setattr(track, "%s_routing_type" % direction, option)
+                changed["type"] = option.display_name
+            if params.get("channel"):
+                option = self._match_routing(getattr(track, "available_%s_routing_channels" % direction), params["channel"])
+                setattr(track, "%s_routing_channel" % direction, option)
+                changed["channel"] = option.display_name
+        result = {"changed": changed}
+        for side in ((direction,) if direction else ("input", "output")):
+            result[side] = self._routing_state(track, side)
+        return result
+
+    def _rpc_view(self, params):
+        app = Live.Application.get_application()
+        song = self.song()
+        result = {}
+        if params.get("show"):
+            app.view.show_view(str(params["show"]))
+            result["shown"] = params["show"]
+        if params.get("focus"):
+            app.view.focus_view(str(params["focus"]))
+            result["focused"] = params["focus"]
+        if params.get("select_track") is not None or params.get("select_return") is not None or params.get("select_master"):
+            selector = {"track_index": params.get("select_track"), "return_index": params.get("select_return"), "master": params.get("select_master")}
+            track = self._resolve_any_track({key: value for key, value in selector.items() if value is not None})
+            song.view.selected_track = track
+            result["selected_track"] = track.name
+        if params.get("select_scene") is not None:
+            song.view.selected_scene = song.scenes[int(params["select_scene"])]
+            result["selected_scene"] = int(params["select_scene"])
+        if params.get("select_device") is not None:
+            track = song.view.selected_track
+            device = track.devices[int(params["select_device"])]
+            song.view.select_device(device)
+            result["selected_device"] = device.name
+        if params.get("detail_clip"):
+            clip = self._resolve_clip_any(params["detail_clip"])
+            song.view.detail_clip = clip
+            result["detail_clip"] = getattr(clip, "name", "")
+        result["visible"] = {name: bool(app.view.is_view_visible(name)) for name in ("Session", "Arranger", "Detail", "Browser")}
+        return result
+
+    _SONG_PROP_SPEC = (
+        ("record_mode", bool),
+        ("session_record", bool),
+        ("arrangement_overdub", bool),
+        ("session_automation_record", bool),
+        ("metronome", bool),
+        ("loop", bool),
+        ("loop_start", float),
+        ("loop_length", float),
+        ("punch_in", bool),
+        ("punch_out", bool),
+        ("signature_numerator", int),
+        ("signature_denominator", int),
+        ("groove_amount", float),
+        ("swing_amount", float),
+        ("clip_trigger_quantization", int),
+        ("midi_recording_quantization", int),
+        ("root_note", int),
+        ("scale_name", str),
+        ("scale_mode", bool),
+    )
+
+    def _rpc_song_set(self, params):
+        song = self.song()
+        values = dict(params)
+        if isinstance(values.get("root_note"), str):
+            values["root_note"] = self._NOTE_NAMES.index(values["root_note"].strip().upper().replace("DB", "C#").replace("EB", "D#").replace("GB", "F#").replace("AB", "G#").replace("BB", "A#"))
+        # session_record and similar transport flags read back one tick late,
+        # so report the requested value rather than trusting the read-back.
+        changed = {}
+        for field, caster in self._SONG_PROP_SPEC:
+            if values.get(field) is None:
+                continue
+            if not hasattr(song, field):
+                changed[field] = "unsupported on this Live version"
+                continue
+            before = getattr(song, field)
+            setattr(song, field, caster(values[field]))
+            changed[field] = [before, caster(values[field])]
+        actions = []
+        for action in params.get("actions") or []:
+            if action == "tap_tempo":
+                song.tap_tempo()
+            elif action == "capture_midi":
+                song.capture_midi()
+            elif action == "re_enable_automation":
+                song.re_enable_automation()
+            elif action == "back_to_arranger":
+                song.back_to_arranger = False
+            elif action == "stop_all_clips":
+                song.stop_all_clips()
+            elif action == "jump_to_next_cue":
+                song.jump_to_next_cue()
+            elif action == "jump_to_prev_cue":
+                song.jump_to_prev_cue()
+            else:
+                raise ValueError("Unknown song action %r" % action)
+            actions.append(action)
+        return {"changed": changed, "actions": actions}
+
+    def _track_kind(self, track):
+        if getattr(track, "is_foldable", False):
+            return "group"
+        if getattr(track, "has_midi_input", False):
+            return "midi"
+        if getattr(track, "has_audio_input", False):
+            return "audio"
+        return "other"
+
+    def _context_track(self, track, index):
+        entry = {
+            "index": index,
+            "name": getattr(track, "name", ""),
+            "kind": self._track_kind(track),
+            "devices": [getattr(device, "name", "") for device in list(getattr(track, "devices", []))[:12]],
+        }
+        for flag in ("mute", "solo", "arm"):
+            if getattr(track, flag, False):
+                entry[flag] = True
+        playing = getattr(track, "playing_slot_index", -1)
+        if playing is not None and playing >= 0:
+            slot = track.clip_slots[playing]
+            entry["playing_clip"] = getattr(slot.clip, "name", "") if getattr(slot, "has_clip", False) else None
+        if getattr(track, "is_grouped", False) and getattr(track, "group_track", None) is not None:
+            entry["group"] = track.group_track.name
+        return entry
+
+    def _rpc_song_context(self, params):
+        song = self.song()
+        context = {
+            "tempo": float(song.tempo),
+            "signature": "%d/%d" % (song.signature_numerator, song.signature_denominator),
+            "is_playing": bool(getattr(song, "is_playing", False)),
+            "current_song_time": float(song.current_song_time),
+        }
+        root = getattr(song, "root_note", None)
+        if root is not None:
+            context["key"] = {
+                "root": self._NOTE_NAMES[int(root) % 12],
+                "scale": getattr(song, "scale_name", None),
+                "intervals": list(getattr(song, "scale_intervals", []) or []),
+                "scale_mode": bool(getattr(song, "scale_mode", False)),
+            }
+        for attr in ("loop", "loop_start", "loop_length", "song_length", "groove_amount", "file_path"):
+            if hasattr(song, attr):
+                context[attr] = getattr(song, attr)
+        view = getattr(song, "view", None)
+        selected = getattr(view, "selected_track", None) if view is not None else None
+        if selected is not None:
+            kind, index = self._track_index_of(selected)
+            context["selected_track"] = {"kind": kind, "index": index, "name": selected.name}
+        selected_scene = getattr(view, "selected_scene", None) if view is not None else None
+        if selected_scene is not None:
+            context["selected_scene"] = getattr(selected_scene, "name", "")
+        context["tracks"] = [self._context_track(track, i) for i, track in enumerate(song.tracks)]
+        context["returns"] = [{"index": i, "name": t.name, "devices": [d.name for d in t.devices]} for i, t in enumerate(song.return_tracks)]
+        context["locators"] = self._cue_list()
+        pool = getattr(song, "groove_pool", None)
+        if pool is not None:
+            context["grooves"] = [getattr(groove, "name", "") for groove in pool.grooves]
+        context["scene_count"] = len(song.scenes)
+        return context
+
+    def _resolve_rack(self, params):
+        if params.get("device_ref"):
+            device = self._resolve(params["device_ref"])
+        else:
+            track = self._resolve_any_track(params)
+            device = track.devices[int(params.get("device_index") or 0)]
+        if not getattr(device, "can_have_chains", False):
+            raise ValueError("Device %r is not a rack" % getattr(device, "name", ""))
+        return device
+
+    def _rack_macros(self, rack):
+        params = list(rack.parameters)
+        visible = int(getattr(rack, "visible_macro_count", 8) or 8)
+        mapped = list(getattr(rack, "macros_mapped", []) or [])
+        macros = []
+        for i in range(min(visible, len(params) - 1)):
+            param = params[i + 1]
+            macros.append({"index": i, "name": param.name, "value": float(param.value),
+                           "min": float(param.min), "max": float(param.max),
+                           "mapped": bool(mapped[i]) if i < len(mapped) else None})
+        return macros
+
+    def _rpc_rack(self, params):
+        rack = self._resolve_rack(params)
+        action = params.get("action") or "inspect"
+        if action == "inspect":
+            chains = []
+            for chain_index, chain in enumerate(rack.chains):
+                chains.append({
+                    "index": chain_index,
+                    "name": getattr(chain, "name", ""),
+                    "mute": bool(getattr(chain, "mute", False)),
+                    "solo": bool(getattr(chain, "solo", False)),
+                    "devices": [{"name": d.name, "class_name": getattr(d, "class_name", "")} for d in chain.devices],
+                })
+            return {"rack": rack.name, "class_name": getattr(rack, "class_name", ""), "macros": self._rack_macros(rack), "chains": chains}
+        if action == "set_macro":
+            index = int(params["macro"])
+            param = list(rack.parameters)[index + 1]
+            value = float(params["value"])
+            if not (float(param.min) <= value <= float(param.max)):
+                raise ValueError("value %.3f outside %.3f..%.3f" % (value, param.min, param.max))
+            before = float(param.value)
+            param.value = value
+            return {"macro": index, "name": param.name, "before": before, "value": float(param.value)}
+        if action == "chain":
+            chain = rack.chains[int(params["chain"])]
+            changed = self._apply_props(chain, params, (("mute", bool), ("solo", bool), ("name", str)))
+            return {"chain": int(params["chain"]), "changed": changed}
+        raise ValueError("action must be inspect, set_macro, or chain")
+
+    def _rpc_take_lanes(self, params):
+        track = self._resolve_any_track(params)
+        if not hasattr(track, "take_lanes"):
+            raise RuntimeError("Take lanes need Live 12.2 or later")
+        if params.get("action") == "create":
+            track.create_take_lane()
+        lanes = [{"index": i, "name": getattr(lane, "name", "")} for i, lane in enumerate(track.take_lanes)]
+        return {"track": track.name, "take_lanes": lanes}
+
+    # ------------------------------------------------------------------
+    # End Rough additions
+    # ------------------------------------------------------------------
 
     def _rpc_fade(self, params):
         track = self._resolve_track_param(params)

@@ -5,7 +5,7 @@ description: Operate the user's local Hermes + Ableton Live MCP setup. Use when 
 
 # Ableton Hermes Operator
 
-Use this skill for the local Hermes-driven Ableton workflow. The primary server is the bschoepke-style Ableton Live MCP (server name `ableton`), patched with named lifecycle, convenience, and fade tools (server version 0.2.0+, Remote Script runtime `lifecycle-fade-wrappers-1`).
+Use this skill for the local Hermes-driven Ableton workflow. The primary server is the bschoepke-style Ableton Live MCP (server name `ableton`), patched with named lifecycle, convenience, and fade tools (server version 0.3.0+, Remote Script runtime `rough-wrappers-1`; Rough named wrappers in AGENTS.md).
 
 ## MCP Setup
 
@@ -16,7 +16,7 @@ Known installed paths:
 - Remote Script: `/Users/tomservo/Music/Ableton/User Library/Remote Scripts/Ableton_Live_MCP`
 - Agent Audio Tap device: `/Users/tomservo/Music/Ableton/User Library/Presets/Audio Effects/Max Audio Effect/AgentAudioTap.amxd`
 
-If the new tools below are missing from the tool list, the installed copy is stale: sync it from the canonical patched source, reinstall the Remote Script (`src/install_remote_script.py`), and reload Live. `live_ping` reports the Remote Script runtime version; expect `lifecycle-fade-wrappers-1` or later.
+If the new tools below are missing from the tool list, the installed copy is stale: sync it from the canonical patched source, reinstall the Remote Script (`src/install_remote_script.py`), and reload Live. `live_ping` reports the Remote Script runtime version; expect `rough-wrappers-1` or later.
 
 Ableton must have Control Surface `Ableton_Live_MCP` selected in Preferences > Link, Tempo & MIDI.
 

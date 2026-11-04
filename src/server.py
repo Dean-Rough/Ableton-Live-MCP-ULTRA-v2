@@ -14,7 +14,7 @@ from similar_sounds import find_similar_sounds
 from visual_capture import capture_ableton_window
 
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 
 ABLETON_AGENT_GUIDE = "General Live object-model bridge; examples are heuristics, not limits."
@@ -473,6 +473,87 @@ def make_server(client: AbletonBridgeClient | None = None) -> StdioMcpServer:
         "allow_over_unity": {"type": "boolean"},
         **mutation_controls,
     }), fade))
+    # --- Rough additions: named wrappers (see NOTICE.md) ---------------
+    # Kept terse for the tools/list budget; value ranges and enum meanings
+    # live in AGENTS.md "Rough named wrappers". Niche ops (clip_select_notes,
+    # take_lanes, delete, duplicate) are also reachable via live_batch.
+    num, int_, bool_, str_ = {"type": "number"}, {"type": "integer"}, {"type": "boolean"}, {"type": "string"}
+    color = {"type": ["string", "integer"]}
+    any_track = {**track_selector, "return_index": int_}
+    clip_sel = {"ref": ref, "track_index": int_, "clip_index": int_, "arrangement_clip_index": int_}
+
+    def enum(*values: Any) -> dict[str, Any]:
+        return {"type": "string", "enum": list(values)}
+
+    server.add_tool(Tool("live_song_context", "Tempo, signature, key/scale, loop, tracks(kind/devices/playing), returns, locators, grooves.", schema(timeout_control), forward("song_context")))
+    server.add_tool(Tool("live_scene", "Scenes; index -1 appends.", schema({
+        "action": enum("list", "create", "fire", "rename", "duplicate", "delete", "stop_all"),
+        "index": int_, "name": str_, "color": color, **mutation_controls,
+    }), forward("scene")))
+    server.add_tool(Tool("live_edit", "Delete or duplicate track/return, device, or Session/Arrangement clip.", schema({
+        "op": enum("delete", "duplicate"), "target": enum("track", "device", "clip"), **any_track,
+        "device_index": int_, "clip_index": int_, "arrangement_clip_index": int_,
+        "to_track_index": int_, "to_clip_index": int_, **mutation_controls,
+    }, ["op", "target"]), forward("edit")))
+    server.add_tool(Tool("live_track_set", "Track/return/master: name, color, volume(0.85=0dB), panning, sends[{index,value}], mute/solo/arm, monitoring in|auto|off, fold.", schema({
+        **any_track, "name": str_, "color": color, "volume": num, "panning": num,
+        "sends": {"type": "array", "items": {"type": "object"}}, "mute": bool_, "solo": bool_, "arm": bool_,
+        "monitoring": {"type": ["string", "integer"]}, "fold": bool_, **mutation_controls,
+    }), forward("track_set")))
+    server.add_tool(Tool("live_undo", "Undo/redo N steps.", schema({"action": enum("undo", "redo"), "count": int_, **mutation_controls}), forward("undo")))
+    server.add_tool(Tool("live_clip_set", "Clip props (only given fields). Audio-only: gain/pitch/warp. groove_index -1 clears.", schema({
+        **clip_sel, "name": str_, "color": color, "muted": bool_, "looping": bool_, "loop_start": num, "loop_end": num,
+        "start_marker": num, "end_marker": num, "launch_mode": int_, "launch_quantization": int_, "legato": bool_,
+        "velocity_amount": num, "gain": num, "pitch_coarse": int_, "pitch_fine": num, "warping": bool_, "warp_mode": int_,
+        "groove_index": int_, **mutation_controls,
+    }), forward("clip_set")))
+    server.add_tool(Tool("live_clip_remove_notes", "Remove MIDI notes in pitch/time range; omit range to clear.", schema({
+        **clip_sel, "from_pitch": int_, "pitch_span": int_, "from_time": num, "time_span": num, **mutation_controls,
+    }), forward("clip_remove_notes")))
+
+    def locators(args: dict[str, Any]) -> Any:
+        params = dict(args or {})
+        result = bridge.request("locators", params)
+        if not (isinstance(result, dict) and result.get("scheduled")):
+            return result
+        want_present = result["scheduled"] == "create"
+        target_time = float(result["time"])
+        listing: Any = None
+        for _ in range(12):
+            time.sleep(0.05)
+            listing = bridge.request("locators", {"action": "list"})
+            cues = listing.get("locators", []) if isinstance(listing, dict) else []
+            match = next((cue for cue in cues if abs(float(cue.get("time", -1)) - target_time) < 1e-3), None)
+            if (match is not None) == want_present:
+                return {"confirmed": True, "action": result["scheduled"], "locator": match, "locators": cues}
+        return {"confirmed": False, "action": result["scheduled"], "time": target_time, "last_listing": listing,
+                "next_action": "list again before retrying; the deferred toggle may still be queued"}
+
+    server.add_tool(Tool("live_locators", "Locators by index/time/name; create/delete need transport stopped, confirmed next tick.", schema({
+        "action": enum("list", "create", "rename", "jump", "delete"), "time": num, "index": int_,
+        "name": str_, "new_name": str_, **mutation_controls,
+    }), locators))
+    server.add_tool(Tool("live_track_routing", "Read, or set input/output routing type/channel by display name.", schema({
+        **any_track, "direction": enum("input", "output"), "type": str_, "channel": str_, **mutation_controls,
+    }), forward("track_routing")))
+    server.add_tool(Tool("live_view", "show/focus Session|Arranger|Detail|Detail/Clip|Detail/DeviceChain|Browser; select track/scene/device; detail_clip.", schema({
+        "show": str_, "focus": str_, "select_track": int_, "select_return": int_, "select_master": bool_,
+        "select_scene": int_, "select_device": int_, "detail_clip": {"type": "object"}, **timeout_control,
+    }), forward("view")))
+    server.add_tool(Tool("live_song_set", "Song flags/values (only given) + actions. root_note 0-11 or name.", schema({
+        "record_mode": bool_, "session_record": bool_, "arrangement_overdub": bool_, "session_automation_record": bool_,
+        "metronome": bool_, "loop": bool_, "loop_start": num, "loop_length": num, "punch_in": bool_, "punch_out": bool_,
+        "signature_numerator": int_, "signature_denominator": int_, "groove_amount": num, "swing_amount": num,
+        "clip_trigger_quantization": int_, "midi_recording_quantization": int_,
+        "root_note": {"type": ["integer", "string"]}, "scale_name": str_, "scale_mode": bool_,
+        "actions": {"type": "array", "items": enum("tap_tempo", "capture_midi", "re_enable_automation", "back_to_arranger", "stop_all_clips", "jump_to_next_cue", "jump_to_prev_cue")},
+        **mutation_controls,
+    }), forward("song_set")))
+    server.add_tool(Tool("live_rack", "Rack inspect (chains+macros), set_macro, chain mute/solo/name.", schema({
+        **any_track, "device_index": int_, "device_ref": ref, "action": enum("inspect", "set_macro", "chain"),
+        "macro": int_, "value": num, "chain": int_, "mute": bool_, "solo": bool_, "name": str_, **mutation_controls,
+    }), forward("rack")))
+    # --- End Rough additions ------------------------------------------
     server.add_tool(Tool("live_batch", "Batch ops.", schema({
         "operations": {"type": "array", "items": {"type": "object", "properties": {
             "method": {"type": "string"},
