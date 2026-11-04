@@ -1871,7 +1871,7 @@ def test_ping_reports_running_remote_script_hash(monkeypatch):
     assert result["ok"] is True
     assert result["remote_script"]["path"].endswith("bridge.py")
     assert len(result["remote_script"]["bridge_sha256"]) == 64
-    assert result["remote_script"]["runtime_version"] == "rough-wrappers-1"
+    assert result["remote_script"]["runtime_version"] == "rough-wrappers-2"
     assert len(result["remote_script"]["runtime_code_sha256"]) == 64
     assert result["remote_script"]["runtime_code_sha256"] == remote_script_status()["source_runtime_code_sha256"]
 

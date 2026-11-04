@@ -27,7 +27,7 @@ live_lifecycle_status, live_save_set, live_quit_ableton — save/quit via Live A
 live_create_midi_track, live_create_audio_track, live_rename_track, live_fire_clip, live_stop_clip, live_set_tempo — ergonomic wrappers around common Live API calls.
 live_fade — timed fader fade run inside Live (smoothstep default, linear optional); 0% = -inf dB, 100% = unity (0.85); target_percent > 100 requires allow_over_unity. Blocks Live's main thread for the duration; the server auto-raises the RPC timeout.
 Reinstall the Remote Script and reload Live after updating (src/install_remote_script.py).
-## Rough fork additions (server 0.3.0, Remote Script runtime rough-wrappers-1)
+## Rough fork additions (server 0.3.0, Remote Script runtime rough-wrappers-2)
 Twelve named wrappers for things the bridge previously only reached through `live_exec`, scoped from ahujasid/ableton-mcp and Tompz/ableton-mcp (see NOTICE.md):
 live_song_context — compact musical context (tempo, signature, key/scale, loop, tracks with kind/devices/playing clip, returns, locators, grooves). Built for agents and plugins that generate material to fit the set.
 live_track_set — mixer and state in one call: name, colour, volume, pan, sends, mute/solo/arm, monitoring, fold. Works on tracks, returns (`return_index`) and master.

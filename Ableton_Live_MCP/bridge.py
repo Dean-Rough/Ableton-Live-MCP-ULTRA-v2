@@ -25,7 +25,7 @@ DEFAULT_CHILD_LIMIT = 200
 DEFAULT_MAIN_THREAD_TIMEOUT = 30
 DEFAULT_MAIN_THREAD_STALL_COOLDOWN = 10
 DEFAULT_BROWSER_ROOTS = ("instruments", "audio_effects", "midi_effects", "drums", "samples", "sounds", "packs", "plugins", "user_library", "user_folders", "current_project")
-REMOTE_SCRIPT_RUNTIME_VERSION = "rough-wrappers-1"
+REMOTE_SCRIPT_RUNTIME_VERSION = "rough-wrappers-2"
 FADE_UNITY_VALUE = 0.8500000238418579
 FADE_MAX_DURATION = 60.0
 FADE_DEFAULT_STEPS = 40
@@ -995,14 +995,16 @@ class AbletonLiveMCP(ControlSurface):
         return self._resolve_track_param(params)
 
     def _track_index_of(self, track):
+        # Live returns a fresh Python wrapper on every access, so identity
+        # (`is`) never matches; compare by canonical path / Live pointer.
         song = self.song()
         for index, candidate in enumerate(song.tracks):
-            if candidate is track:
+            if self._same_live_object(candidate, track):
                 return ("track", index)
         for index, candidate in enumerate(song.return_tracks):
-            if candidate is track:
+            if self._same_live_object(candidate, track):
                 return ("return", index)
-        if track is song.master_track:
+        if self._same_live_object(song.master_track, track):
             return ("master", None)
         return (None, None)
 

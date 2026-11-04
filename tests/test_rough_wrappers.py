@@ -337,3 +337,26 @@ def test_take_lanes_list_and_create(monkeypatch):
     assert bridge._rpc_take_lanes({"track_index": 0})["take_lanes"] == []
     result = bridge._rpc_take_lanes({"track_index": 0, "action": "create"})
     assert result["take_lanes"] == [{"index": 0, "name": "Take 1"}]
+
+
+class Wrapper:
+    """A second Python wrapper for the same Live object, as Live returns on each access."""
+
+    def __init__(self, target):
+        self._target = target
+        self._live_ptr = target._live_ptr
+
+    def __getattr__(self, name):
+        return getattr(self._target, name)
+
+
+def test_track_identity_survives_fresh_wrappers(monkeypatch):
+    bridge, song, _app = make_bridge(monkeypatch)
+    enrich_song(song)
+    for ptr, track in enumerate(list(song.tracks) + list(song.return_tracks) + [song.master_track], start=100):
+        track._live_ptr = ptr
+    song.view.selected_track = Wrapper(song.tracks[1])
+    assert bridge._rpc_song_context({})["selected_track"] == {"kind": "track", "index": 1, "name": "Track 2"}
+    song.view.selected_track = Wrapper(song.master_track)
+    assert bridge._rpc_song_context({})["selected_track"]["kind"] == "master"
+    assert bridge._track_index_of(Wrapper(song.return_tracks[0])) == ("return", 0)

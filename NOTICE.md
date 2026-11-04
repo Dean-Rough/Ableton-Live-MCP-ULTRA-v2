@@ -1,6 +1,6 @@
 # Notices
 
-## Rough named wrappers (server 0.3.0, Remote Script runtime `rough-wrappers-1`)
+## Rough named wrappers (server 0.3.0, Remote Script runtime `rough-wrappers-2`)
 
 The named wrappers added in the Rough fork (`live_song_context`, `live_scene`,
 `live_edit`, `live_track_set`, `live_undo`, `live_clip_set`,
