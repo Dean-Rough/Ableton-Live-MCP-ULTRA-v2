@@ -84,3 +84,10 @@ def test_locators_list_passes_through():
     server = server_module.make_server(bridge)
     result = call(server, "live_locators", {"action": "list"})["result"]["structuredContent"]
     assert result == {"locators": []}
+
+
+def test_every_tool_schema_is_an_object():
+    server = server_module.make_server(FakeBridge())
+    tools = server.handle({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})["result"]["tools"]
+    bad = [tool["name"] for tool in tools if tool["inputSchema"].get("type") != "object"]
+    assert bad == []

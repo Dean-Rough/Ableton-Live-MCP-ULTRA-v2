@@ -68,7 +68,9 @@ def schema(properties: dict[str, Any], required: list[str] | None = None) -> dic
 
 
 def loose_schema() -> dict[str, Any]:
-    return {}
+    # MCP requires inputSchema.type == "object"; Claude Code rejects the whole
+    # tools/list (no tools at all) when any tool advertises a bare {}.
+    return {"type": "object", "additionalProperties": True}
 
 
 def make_server(client: AbletonBridgeClient | None = None) -> StdioMcpServer:
