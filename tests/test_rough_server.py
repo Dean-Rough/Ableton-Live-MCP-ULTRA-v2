@@ -91,3 +91,27 @@ def test_every_tool_schema_is_an_object():
     tools = server.handle({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})["result"]["tools"]
     bad = [tool["name"] for tool in tools if tool["inputSchema"].get("type") != "object"]
     assert bad == []
+
+
+def test_union_typed_arguments_pass_server_validation():
+    bridge = FakeBridge()
+    server = server_module.make_server(bridge)
+    ok = [
+        ("live_track_set", {"track_index": 1, "color": "#FF3366", "monitoring": "in"}),
+        ("live_track_set", {"track_index": 1, "color": 16724838, "monitoring": 2}),
+        ("live_song_set", {"root_note": "Eb", "scale_name": "Dorian"}),
+        ("live_song_set", {"root_note": 3}),
+        ("live_clip_set", {"track_index": 0, "clip_index": 0, "color": "#112233"}),
+        ("live_scene", {"action": "create", "color": 255}),
+    ]
+    for name, arguments in ok:
+        response = call(server, name, arguments)
+        assert "error" not in response, (name, response)
+    assert len(bridge.calls) == len(ok)
+
+
+def test_union_typed_arguments_still_reject_wrong_types():
+    server = server_module.make_server(FakeBridge())
+    response = call(server, "live_track_set", {"track_index": 1, "color": 1.5})
+    assert "error" in response
+    assert "string or integer" in response["error"]["message"]

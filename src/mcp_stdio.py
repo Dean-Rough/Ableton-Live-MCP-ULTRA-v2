@@ -133,6 +133,8 @@ def _validate_type(value: Any, expected: str, path: str) -> None:
         "number": lambda item: isinstance(item, (int, float)) and not isinstance(item, bool),
         "boolean": lambda item: isinstance(item, bool),
     }
-    check = checks.get(expected)
-    if check and not check(value):
-        raise ValueError("%s must be %s" % (path, expected))
+    # JSON Schema allows "type" to be a list of alternatives.
+    options = expected if isinstance(expected, list) else [expected]
+    known = [checks[option] for option in options if option in checks]
+    if known and not any(check(value) for check in known):
+        raise ValueError("%s must be %s" % (path, " or ".join(map(str, options))))
