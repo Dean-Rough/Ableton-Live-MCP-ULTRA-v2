@@ -101,7 +101,8 @@ def test_union_typed_arguments_pass_server_validation():
         ("live_track_set", {"track_index": 1, "color": 16724838, "monitoring": 2}),
         ("live_song_set", {"root_note": "Eb", "scale_name": "Dorian"}),
         ("live_song_set", {"root_note": 3}),
-        ("live_clip_set", {"track_index": 0, "clip_index": 0, "color": "#112233"}),
+        ("live_clip_set", {"track_index": 0, "clip_index": 0, "color": "#112233", "color_index": 5}),
+        ("live_track_set", {"track_index": 0, "color_index": 12}),
         ("live_scene", {"action": "create", "color": 255}),
     ]
     for name, arguments in ok:

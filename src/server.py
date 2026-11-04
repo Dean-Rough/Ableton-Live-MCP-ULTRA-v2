@@ -498,13 +498,13 @@ def make_server(client: AbletonBridgeClient | None = None) -> StdioMcpServer:
         "to_track_index": int_, "to_clip_index": int_, **mutation_controls,
     }, ["op", "target"]), forward("edit")))
     server.add_tool(Tool("live_track_set", "Track/return/master: name, color, volume(0.85=0dB), panning, sends[{index,value}], mute/solo/arm, monitoring in|auto|off, fold.", schema({
-        **any_track, "name": str_, "color": color, "volume": num, "panning": num,
+        **any_track, "name": str_, "color": color, "color_index": int_, "volume": num, "panning": num,
         "sends": {"type": "array", "items": {"type": "object"}}, "mute": bool_, "solo": bool_, "arm": bool_,
         "monitoring": {"type": ["string", "integer"]}, "fold": bool_, **mutation_controls,
     }), forward("track_set")))
     server.add_tool(Tool("live_undo", "Undo/redo N steps.", schema({"action": enum("undo", "redo"), "count": int_, **mutation_controls}), forward("undo")))
     server.add_tool(Tool("live_clip_set", "Clip props (only given fields). Audio-only: gain/pitch/warp. groove_index -1 clears.", schema({
-        **clip_sel, "name": str_, "color": color, "muted": bool_, "looping": bool_, "loop_start": num, "loop_end": num,
+        **clip_sel, "name": str_, "color": color, "color_index": int_, "muted": bool_, "looping": bool_, "loop_start": num, "loop_end": num,
         "start_marker": num, "end_marker": num, "launch_mode": int_, "launch_quantization": int_, "legato": bool_,
         "velocity_amount": num, "gain": num, "pitch_coarse": int_, "pitch_fine": num, "warping": bool_, "warp_mode": int_,
         "groove_index": int_, **mutation_controls,
