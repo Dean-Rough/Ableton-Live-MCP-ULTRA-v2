@@ -35,6 +35,7 @@ live_clip_set — clip properties, loop/markers (writes ordered so Live never se
 live_clip_remove_notes — range-delete or clear MIDI notes. live_scene — list/create/fire/rename/duplicate/delete/stop_all. live_edit — delete or duplicate tracks, devices and clips.
 live_locators — create/rename/jump/delete arrangement locators, confirmed after Live's next tick. live_track_routing, live_view, live_song_set (record, metronome, loop, punch, signature, groove, key/scale, tap tempo, capture MIDI), live_rack (inspect, macros, chains), live_undo.
 `clip_select_notes` and `take_lanes` are available as `live_batch` methods to keep tools/list compact.
+Track creation is guarded: if your default MIDI/Audio track template loads third-party plug-ins, `live_create_*_track` refuses until the call passes `allow_template_plugins: true` (a broken plug-in in that template can crash Live mid-call). `ABLETON_MCP_ALLOW_TEMPLATE_PLUGINS=1` disables the check.
 ## Demos
 Here are a couple examples of live sets made from scratch with Codex in just a few minutes, along with their prompts. After it makes something, you can ask for follow up changes.
 

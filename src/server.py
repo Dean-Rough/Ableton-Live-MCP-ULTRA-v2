@@ -11,6 +11,7 @@ from bridge import AbletonBridgeClient, BridgeConfig
 from agent_m4l import build_device, command_file as agent_m4l_command_file, device_name as agent_m4l_device_name, infer_device_bounds, normalize_role, slugify, status_file as agent_m4l_status_file, udp_port as agent_m4l_udp_port, write_webui, write_webui_asset_files, write_webui_assets
 from mcp_stdio import StdioMcpServer, Tool
 from similar_sounds import find_similar_sounds
+from template_guard import guard_track_creation
 from visual_capture import capture_ableton_window
 
 
@@ -430,16 +431,25 @@ def make_server(client: AbletonBridgeClient | None = None) -> StdioMcpServer:
         "quit_delay_ticks": {"type": "integer", "minimum": 1},
         **timeout_control,
     }), forward("quit_ableton")))
-    server.add_tool(Tool("live_create_midi_track", "Create MIDI track; -1 appends.", schema({
+    def create_track(kind: str):
+        def handler(args: dict[str, Any]) -> Any:
+            params = dict(args or {})
+            guard_track_creation(kind, bool(params.pop("allow_template_plugins", False)))
+            return bridge.request("create_%s_track" % kind, params)
+        return handler
+
+    server.add_tool(Tool("live_create_midi_track", "Create MIDI track; -1 appends. Refuses if the default track template loads third-party plug-ins.", schema({
         "index": {"type": "integer"},
         "name": {"type": "string"},
+        "allow_template_plugins": {"type": "boolean"},
         **mutation_controls,
-    }), forward("create_midi_track")))
-    server.add_tool(Tool("live_create_audio_track", "Create audio track; -1 appends.", schema({
+    }), create_track("midi")))
+    server.add_tool(Tool("live_create_audio_track", "Create audio track; -1 appends. Refuses if the default track template loads third-party plug-ins.", schema({
         "index": {"type": "integer"},
         "name": {"type": "string"},
+        "allow_template_plugins": {"type": "boolean"},
         **mutation_controls,
-    }), forward("create_audio_track")))
+    }), create_track("audio")))
     server.add_tool(Tool("live_rename_track", "Rename track by ref/track_index/master.", schema({
         **track_selector,
         "name": {"type": "string"},
